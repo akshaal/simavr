@@ -25,6 +25,9 @@ SIMAVR_REVISION	= 2
 
 target	= run_avr
 
+PYINCS = `python-config --include`
+PYLIBS = `python-config --libs`
+
 CFLAGS	+= -Werror
 # tracing is useful especialy if you develop simavr core.
 # it otherwise eat quite a bit of few cycles, even disabled
@@ -32,7 +35,7 @@ CFLAGS	+= -Werror
 
 all:
 	$(MAKE) obj config
-	$(MAKE) libsimavr ${target}
+	$(MAKE) libsimavr py/csimavr.py ${target}
 
 include ../Makefile.common
 
@@ -46,6 +49,9 @@ VPATH	+= sim
 IPATH	+= sim
 IPATH	+= .
 IPATH	+= ../../shared
+
+py/csimavr.py: py/csimavr.i
+	(cd py; ./setup.py "${OBJ}" build)
 
 #
 # Static library
@@ -92,6 +98,7 @@ ${target}	: ${OBJ}/${target}.elf
 clean: clean-${OBJ}
 	rm -rf ${target} *.a *.so *.exe
 	rm -f sim_core_*.h
+	rm -rf py/csimavr_wrap.c py/csimavr_wrap.o py/_csimavr.so py/csimavr.py py/build
 
 DESTDIR = /usr/local
 PREFIX = ${DESTDIR}
@@ -114,6 +121,7 @@ ifeq (${shell uname}, Linux)
 endif
 	$(MKDIR) $(DESTDIR)/bin
 	$(INSTALL) ${OBJ}/${target}.elf $(DESTDIR)/bin/simavr
+	(cd py; ./setup.py "${OBJ}" install)
 
 # Needs 'fpm', oneline package manager. Install with 'gem install fpm'
 # This generates 'mock' debian files, without all the policy, scripts

@@ -17,3 +17,9 @@ callgrind.out.*
 perf.data
 .DS_Store
 .make.options*
+simavr/py/build/
+simavr/py/csimavr.py
+simavr/py/csimavr_wrap.c
+simavr/py/simavr_wrap.c
+*.pyc
+*.a
