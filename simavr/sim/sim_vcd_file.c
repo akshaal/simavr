@@ -21,7 +21,7 @@
 	You should have received a copy of the GNU General Public License
 	along with simavr.  If not, see <http://www.gnu.org/licenses/>.
  */
-#define _GNU_SOURCE /* for strdupa */
+
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -33,6 +33,8 @@
 #include "sim_utils.h"
 
 DEFINE_FIFO(avr_vcd_log_t, avr_vcd_fifo);
+
+#define strdupa(__s) strcpy(alloca(strlen(__s)+1), __s)
 
 static void
 _avr_vcd_notify(
@@ -262,18 +264,37 @@ avr_vcd_init_input(
 			continue;
 
 		if (!strcmp(keyword, "$timescale")) {
-			double cnt = 0;
-			vcd->vcd_to_us = 1;
+			// sim_vcd header allows only integer factors of us: 1us, 2us, 3us, 10us, 15us, ...
+			uint64_t cnt = 0;
 			char *si = v->argv[1];
+
+			vcd->vcd_to_us = 1;
 			while (si && *si && isdigit(*si))
 				cnt = (cnt * 10) + (*si++ - '0');
-			while (*si == ' ')
+			while (si && *si == ' ')
 				si++;
-			if (!*si)
+			if (si && !*si)
 				si = v->argv[2];
-		//	if (!strcmp(si, "ns")) // TODO: Check that,
-		//		vcd->vcd_to_us = cnt;
-		//	printf("cnt %dus; unit %s\n", (int)cnt, si);
+			if (!strcmp(si, "ns")) {
+				if (cnt%1000==0) {
+					// save for conversion
+					cnt/=1000;
+					vcd->vcd_to_us = cnt;
+				} else {
+					perror("Cannot convert timescale from ns to us without loss of precision");
+					return -1;
+				}
+			} else if (!strcmp(si, "us")) {
+				// no calculation here
+				vcd->vcd_to_us = cnt;
+			} else if (!strcmp(si, "ms")) {
+				cnt*=1000;
+				vcd->vcd_to_us = cnt;
+			} else if (!strcmp(si, "s")) {
+				cnt*=1000000;
+				vcd->vcd_to_us = cnt;
+			}
+			// printf("cnt %dus; unit %s\n", (int)cnt, si);
 		} else if (!strcmp(keyword, "$var")) {
 			const char *name = v->argv[4];
 
@@ -396,8 +417,8 @@ avr_vcd_flush_log(
 
 	while (!avr_vcd_fifo_isempty(&vcd->log)) {
 		avr_vcd_log_t l = avr_vcd_fifo_read(&vcd->log);
-		// 1ns base
-		uint64_t base = avr_cycles_to_nsec(vcd->avr, l.when - vcd->start);
+		// 10ns base -- 100MHz should be enough
+		uint64_t base = avr_cycles_to_nsec(vcd->avr, l.when - vcd->start) / 10;
 
 		/*
 		 * if that trace was seen in this nsec already, we fudge the
@@ -448,8 +469,12 @@ _avr_vcd_notify(
 {
 	avr_vcd_t * vcd = (avr_vcd_t *)param;
 
-	if (!vcd->output)
+	if (!vcd->output) {
+		AVR_LOG(vcd->avr, LOG_WARNING,
+				"%s: no output\n",
+				__FUNCTION__);
 		return;
+	}
 
 	avr_vcd_signal_t * s = (avr_vcd_signal_t*)irq;
 	avr_vcd_log_t l = {
@@ -476,8 +501,12 @@ avr_vcd_add_signal(
 		int signal_bit_size,
 		const char * name )
 {
-	if (vcd->signal_count == AVR_VCD_MAX_SIGNALS)
+	if (vcd->signal_count == AVR_VCD_MAX_SIGNALS) {
+		AVR_LOG(vcd->avr, LOG_ERROR,
+			" %s: unable add signal '%s'\n",
+			__FUNCTION__, name);
 		return -1;
+	}
 	int index = vcd->signal_count++;
 	avr_vcd_signal_t * s = &vcd->signal[index];
 	strncpy(s->name, name, sizeof(s->name));
@@ -523,7 +552,7 @@ avr_vcd_start(
 		return -1;
 	}
 
-	fprintf(vcd->output, "$timescale 1ns $end\n");	// 1ns base
+	fprintf(vcd->output, "$timescale 10ns $end\n");	// 10ns base, aka 100MHz
 	fprintf(vcd->output, "$scope module logic $end\n");
 
 	for (int i = 0; i < vcd->signal_count; i++) {

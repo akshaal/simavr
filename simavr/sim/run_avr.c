@@ -38,13 +38,13 @@ display_usage(
 	const char * app)
 {
 	printf("Usage: %s [...] <firmware>\n", app);
-	printf( "		[--freq|-f <freq>]  Sets the frequency for an .hex firmware\n"
-			"		[--mcu|-m <device>] Sets the MCU type for an .hex firmware\n"
+	printf( "       [--freq|-f <freq>]  Sets the frequency for an .hex firmware\n"
+			"       [--mcu|-m <device>] Sets the MCU type for an .hex firmware\n"
 			"       [--list-cores]      List all supported AVR cores and exit\n"
 			"       [--help|-h]         Display this usage message and exit\n"
 			"       [--trace, -t]       Run full scale decoder trace\n"
 			"       [-ti <vector>]      Add traces for IRQ vector <vector>\n"
-			"       [--gdb|-g]          Listen for gdb connection on port 1234\n"
+			"       [--gdb|-g [<port>]] Listen for gdb connection on <port> (default 1234)\n"
 			"       [-ff <.hex file>]   Load next .hex file as flash\n"
 			"       [-ee <.hex file>]   Load next .hex file as eeprom\n"
 			"       [--input|-i <file>] A .vcd file to use as input signals\n"
@@ -90,6 +90,7 @@ main(
 	int trace = 0;
 	int gdb = 0;
 	int log = 1;
+	int port = 1234;
 	char name[24] = "";
 	uint32_t loadBase = AVR_SEGMENT_OFFSET_FLASH;
 	int trace_vectors[8] = {0};
@@ -106,7 +107,7 @@ main(
 			display_usage(basename(argv[0]));
 		} else if (!strcmp(argv[pi], "-m") || !strcmp(argv[pi], "--mcu")) {
 			if (pi < argc-1)
-				strncpy(name, argv[++pi], sizeof(name));
+				snprintf(name, sizeof(name), "%s", argv[++pi]);
 			else
 				display_usage(basename(argv[0]));
 		} else if (!strcmp(argv[pi], "-f") || !strcmp(argv[pi], "--freq")) {
@@ -121,11 +122,83 @@ main(
 				display_usage(basename(argv[0]));
 		} else if (!strcmp(argv[pi], "-t") || !strcmp(argv[pi], "--trace")) {
 			trace++;
+		} else if (!strcmp(argv[pi], "--vcd-trace-name")) {
+			if (pi + 1 >= argc) {
+				fprintf(stderr, "%s: missing mandatory argument for %s.\n", argv[0], argv[pi]);
+				exit(1);
+			}
+			++pi;
+			snprintf(f.tracename, sizeof(f.tracename), "%s",  argv[pi]);
+		} else if (!strcmp(argv[pi], "--add-vcd-trace")) {
+			if (pi + 1 >= argc) {
+				fprintf(stderr, "%s: missing mandatory argument for %s.\n", argv[0], argv[pi]);
+				exit(1);
+			}
+			++pi;
+			struct {
+				char     kind[64];
+				uint8_t  mask;
+				uint16_t addr;
+				char     name[64];
+			} trace;
+			const int n_args = sscanf(
+				argv[pi],
+				"%63[^=]=%63[^@]@0x%hx/0x%hhx",
+				&trace.name[0],
+				&trace.kind[0],
+				&trace.addr,
+				&trace.mask
+			);
+			if (n_args != 4) {
+				--pi;
+				fprintf(stderr, "%s: format for %s is name=kind@addr/mask.\n", argv[0], argv[pi]);
+				exit(1);
+			}
+
+			/****/ if (!strcmp(trace.kind, "portpin")) {
+				f.trace[f.tracecount].kind = AVR_MMCU_TAG_VCD_PORTPIN;
+			} else if (!strcmp(trace.kind, "irq")) {
+				f.trace[f.tracecount].kind = AVR_MMCU_TAG_VCD_IRQ;
+			} else if (!strcmp(trace.kind, "trace")) {
+				f.trace[f.tracecount].kind = AVR_MMCU_TAG_VCD_TRACE;
+			} else {
+				fprintf(
+					stderr,
+					"%s: unknown trace kind '%s', not one of 'portpin', 'irq', or 'trace'.\n",
+					argv[0],
+					trace.kind
+				);
+				exit(1);
+			}
+			f.trace[f.tracecount].mask = trace.mask;
+			f.trace[f.tracecount].addr = trace.addr;
+			strncpy(f.trace[f.tracecount].name, trace.name, sizeof(f.trace[f.tracecount].name));
+
+			printf(
+				"Adding %s trace on address 0x%04x, mask 0x%02x ('%s')\n",
+				  f.trace[f.tracecount].kind == AVR_MMCU_TAG_VCD_PORTPIN ? "portpin"
+				: f.trace[f.tracecount].kind == AVR_MMCU_TAG_VCD_IRQ     ? "irq"
+				: f.trace[f.tracecount].kind == AVR_MMCU_TAG_VCD_TRACE   ? "trace"
+				: "unknown",
+				f.trace[f.tracecount].addr,
+				f.trace[f.tracecount].mask,
+				f.trace[f.tracecount].name
+			);
+
+			++f.tracecount;
+		} else if (!strcmp(argv[pi], "--vcd-trace-file")) {
+			if (pi + 1 >= argc) {
+				fprintf(stderr, "%s: missing mandatory argument for %s.\n", argv[0], argv[pi]);
+				exit(1);
+			}
+			snprintf(f.tracename, sizeof(f.tracename), "%s", argv[++pi]);
 		} else if (!strcmp(argv[pi], "-ti")) {
 			if (pi < argc-1)
 				trace_vectors[trace_vectors_count++] = atoi(argv[++pi]);
 		} else if (!strcmp(argv[pi], "-g") || !strcmp(argv[pi], "--gdb")) {
 			gdb++;
+			if (pi < (argc-2) && argv[pi+1][0] != '-' )
+				port = atoi(argv[++pi]);
 		} else if (!strcmp(argv[pi], "-v")) {
 			log++;
 		} else if (!strcmp(argv[pi], "-ee")) {
@@ -183,13 +256,13 @@ main(
 		exit(1);
 	}
 	avr_init(avr);
+	avr->log = (log > LOG_TRACE ? LOG_TRACE : log);
+	avr->trace = trace;
 	avr_load_firmware(avr, &f);
 	if (f.flashbase) {
 		printf("Attempted to load a bootloader at %04x\n", f.flashbase);
 		avr->pc = f.flashbase;
 	}
-	avr->log = (log > LOG_TRACE ? LOG_TRACE : log);
-	avr->trace = trace;
 	for (int ti = 0; ti < trace_vectors_count; ti++) {
 		for (int vi = 0; vi < avr->interrupts.vector_count; vi++)
 			if (avr->interrupts.vector[vi]->vector == trace_vectors[ti])
@@ -203,7 +276,7 @@ main(
 	}
 
 	// even if not setup at startup, activate gdb if crashing
-	avr->gdb_port = 1234;
+	avr->gdb_port = port;
 	if (gdb) {
 		avr->state = cpu_Stopped;
 		avr_gdb_init(avr);

@@ -21,17 +21,19 @@
  */
 
 #include "sim_avr.h"
-#include "sim_core_declare.h"
 #include "avr_eeprom.h"
 #include "avr_watchdog.h"
 #include "avr_extint.h"
 #include "avr_ioport.h"
 #include "avr_timer.h"
 #include "avr_adc.h"
+#include "avr_acomp.h"
 
 #define _AVR_IO_H_
 #define __ASSEMBLER__
 #include "avr/iotn13.h"
+
+#include "sim_core_declare.h"
 
 static void init(struct avr_t * avr);
 static void reset(struct avr_t * avr);
@@ -44,6 +46,7 @@ static const struct mcu_t {
 	avr_extint_t	extint;
 	avr_ioport_t	portb;
 	avr_timer_t		timer0;
+	avr_acomp_t		acomp;
 	avr_adc_t       adc;
 } mcu = {
 	.core = {
@@ -103,6 +106,8 @@ static const struct mcu_t {
 		.comp = {
 			[AVR_TIMER_COMPA] = {
 				.r_ocr = OCR0A,
+				.com = AVR_IO_REGBITS(TCCR0A, COM0A0, 0x3),
+				.com_pin = AVR_IO_REGBIT(PORTB, 0),
 				.interrupt = {
 					.enable = AVR_IO_REGBIT(TIMSK0, OCIE0A),
 					.raised = AVR_IO_REGBIT(TIFR0, OCF0A),
@@ -111,6 +116,8 @@ static const struct mcu_t {
 			},
 			[AVR_TIMER_COMPB] = {
 				.r_ocr = OCR0B,
+				.com = AVR_IO_REGBITS(TCCR0A, COM0B0, 0x3),
+				.com_pin = AVR_IO_REGBIT(PORTB, 1),
 				.interrupt = {
 					.enable = AVR_IO_REGBIT(TIMSK0, OCIE0B),
 					.raised = AVR_IO_REGBIT(TIFR0, OCF0B),
@@ -119,6 +126,26 @@ static const struct mcu_t {
 			}
 		}
 	},
+
+	.acomp = {
+		.mux_inputs = 4,
+		.mux = { AVR_IO_REGBIT(ADMUX, MUX0), AVR_IO_REGBIT(ADMUX, MUX1) },
+		.aden = AVR_IO_REGBIT(ADCSRA, ADEN),
+		.acme = AVR_IO_REGBIT(ADCSRB, ACME),
+
+		.r_acsr = ACSR,
+		.acis = { AVR_IO_REGBIT(ACSR, ACIS0), AVR_IO_REGBIT(ACSR, ACIS1) },
+		.aco = AVR_IO_REGBIT(ACSR, ACO),
+		.acbg = AVR_IO_REGBIT(ACSR, ACBG),
+		.disabled = AVR_IO_REGBIT(ACSR, ACD),
+
+		.ac = {
+			.enable = AVR_IO_REGBIT(ACSR, ACIE),
+			.raised = AVR_IO_REGBIT(ACSR, ACI),
+			.vector = ANA_COMP_vect,
+		}
+	},
+
 	.adc = {
 		.r_admux = ADMUX,
 		.mux = { AVR_IO_REGBIT(ADMUX, MUX0),
@@ -185,6 +212,7 @@ static void init(struct avr_t * avr)
 	avr_extint_init(avr, &mcu->extint);
 	avr_ioport_init(avr, &mcu->portb);
 	avr_timer_init(avr, &mcu->timer0);
+	avr_acomp_init(avr, &mcu->acomp);
 	avr_adc_init(avr, &mcu->adc);
 }
 
